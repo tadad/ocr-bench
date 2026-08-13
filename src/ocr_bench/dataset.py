@@ -571,7 +571,9 @@ def _find_text_column(ds: Dataset) -> str | None:
     """Find the likely OCR text column in a dataset.
 
     Priority:
-      1. ``inference_info[0]["column_name"]`` if present and exists in dataset.
+      1. The final ``inference_info`` entry's ``column_name`` if present and
+         exists in the dataset. OCR scripts append entries, so the final entry
+         describes the model output represented by this config.
       2. First column matching ``markdown`` (case-insensitive).
       3. First column matching ``ocr`` (case-insensitive).
       4. Column named exactly ``text``.
@@ -583,7 +585,7 @@ def _find_text_column(ds: Dataset) -> str | None:
             if info_raw:
                 info = json.loads(info_raw)
                 if isinstance(info, list):
-                    info = info[0]
+                    info = info[-1]
                 col_name = info.get("column_name", "")
                 if col_name and col_name in ds.column_names:
                     return col_name

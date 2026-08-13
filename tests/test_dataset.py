@@ -214,6 +214,22 @@ class TestFindTextColumn:
         )
         assert _find_text_column(ds) == "new_ocr"
 
+    def test_inference_info_list_uses_last_entry_with_an_existing_column(self):
+        info = json.dumps(
+            [
+                {"column_name": "old_ocr", "model_id": "org/old-model"},
+                {"model_id": "org/new-model"},
+            ]
+        )
+        ds = Dataset.from_dict(
+            {
+                "image": [None],
+                "old_ocr": ["old output"],
+                "inference_info": [info],
+            }
+        )
+        assert _find_text_column(ds) == "old_ocr"
+
 
 # ---------------------------------------------------------------------------
 # discover_pr_configs
@@ -344,6 +360,27 @@ class TestLoadConfigDataset:
 
         assert ocr_cols == {"cfg": "org/new-model"}
         assert ds["cfg"] == ["new one", "new two"]
+
+    @patch("ocr_bench.dataset.load_dataset")
+    def test_incomplete_final_entry_keeps_model_and_output_in_sync(self, mock_load):
+        info = json.dumps(
+            [
+                {"column_name": "old_ocr", "model_id": "org/old-model"},
+                {"model_id": "org/new-model"},
+            ]
+        )
+        mock_load.return_value = Dataset.from_dict(
+            {
+                "image": [None, None],
+                "old_ocr": ["old one", "old two"],
+                "inference_info": [info, info],
+            }
+        )
+
+        ds, ocr_cols = load_config_dataset("repo/id", ["cfg"])
+
+        assert ocr_cols == {"cfg": "org/old-model"}
+        assert ds["cfg"] == ["old one", "old two"]
 
     @patch("ocr_bench.dataset.load_dataset")
     def test_merges_two_configs(self, mock_load):

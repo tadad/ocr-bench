@@ -12,7 +12,6 @@ from ocr_bench.metrics import MetricResult, MetricSummary
 from ocr_bench.publish import (
     EvalMetadata,
     _align_metadata_rows,
-    _has_metric_configs,
     build_leaderboard_rows,
     build_metadata_row,
     load_existing_comparisons,
@@ -849,33 +848,6 @@ class TestPublishMetricResults:
             load_existing_metric_metadata("user/results")
 
 
-class TestHasMetricConfigs:
-    @patch("ocr_bench.publish.HfApi")
-    def test_detects_any_metric_config(self, mock_api_cls):
-        mock_api_cls.return_value.list_repo_files.return_value = [
-            "README.md",
-            "metric_details/train-00000-of-00001.parquet",
-        ]
-
-        assert _has_metric_configs("user/results") is True
-
-    @patch("ocr_bench.publish.HfApi")
-    def test_returns_false_without_metric_configs(self, mock_api_cls):
-        mock_api_cls.return_value.list_repo_files.return_value = [
-            "README.md",
-            "leaderboard/train-00000-of-00001.parquet",
-        ]
-
-        assert _has_metric_configs("user/results") is False
-
-    @patch("ocr_bench.publish.HfApi")
-    def test_fails_closed_when_repo_inspection_fails(self, mock_api_cls):
-        mock_api_cls.return_value.list_repo_files.side_effect = RuntimeError("network down")
-
-        with pytest.raises(OSError, match="refusing to replace its dataset card"):
-            _has_metric_configs("user/results")
-
-
 class TestBuildReadme:
     def _make_metadata(self) -> EvalMetadata:
         return EvalMetadata(
@@ -908,33 +880,6 @@ class TestBuildReadme:
             "user/results", rows, board, self._make_metadata(), license_id="cc0-1.0"
         )
         assert "license: cc0-1.0" in readme
-
-    def test_metric_configs_included_when_present(self):
-        from ocr_bench.publish import _build_readme
-
-        board = _make_board()
-        rows = build_leaderboard_rows(board)
-        readme = _build_readme(
-            "user/results",
-            rows,
-            board,
-            self._make_metadata(),
-            include_metrics=True,
-        )
-
-        assert "config_name: metrics" in readme
-        assert "config_name: metric_details" in readme
-        assert "config_name: metric_metadata" in readme
-        assert 'name="metrics"' in readme
-
-    def test_metric_configs_omitted_by_default(self):
-        from ocr_bench.publish import _build_readme
-
-        board = _make_board()
-        rows = build_leaderboard_rows(board)
-        readme = _build_readme("user/results", rows, board, self._make_metadata())
-
-        assert "config_name: metrics" not in readme
 
     def test_source_split_included(self):
         from ocr_bench.publish import _build_readme

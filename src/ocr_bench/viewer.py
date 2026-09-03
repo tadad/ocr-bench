@@ -47,48 +47,10 @@ def load_results(repo_id: str) -> tuple[list[dict[str, Any]], list[dict[str, Any
         leaderboard_ds = load_dataset(repo_id, split="train", revision=revision)
         leaderboard_rows = [dict(row) for row in leaderboard_ds]
     except Exception:
-        try:
-            leaderboard_ds = load_dataset(
-                repo_id, name="leaderboard", split="train", revision=revision
-            )
-            leaderboard_rows = [dict(row) for row in leaderboard_ds]
-        except Exception:
-            logger.warning("no_leaderboard_config", repo=repo_id)
-            leaderboard_rows = []
-
-    # Ground-truth metrics are published independently from VLM judging. Merge
-    # them by model when both exist; a metrics-only repository remains viewable
-    # as a CER/WER leaderboard without manufacturing ELO values.
-    try:
-        metrics_ds = load_dataset(
-            repo_id, name="metrics", split="train", revision=revision
+        leaderboard_ds = load_dataset(
+            repo_id, name="leaderboard", split="train", revision=revision
         )
-        metric_rows = [dict(row) for row in metrics_ds]
-    except Exception:
-        metric_rows = []
-
-    if metric_rows:
-        metrics_by_model = {row.get("model"): row for row in metric_rows}
-        if leaderboard_rows:
-            for row in leaderboard_rows:
-                metric_row = metrics_by_model.get(row.get("model"))
-                if metric_row:
-                    row.update(
-                        {
-                            key: value
-                            for key, value in metric_row.items()
-                            if key not in {"model", "column"}
-                        }
-                    )
-            if not any(row.get("elo") is not None for row in leaderboard_rows):
-                for row in leaderboard_rows:
-                    row.setdefault("status", "metric-only")
-                    row.setdefault("elo", None)
-        else:
-            leaderboard_rows = [
-                {**row, "status": "metric-only", "elo": None}
-                for row in metric_rows
-            ]
+        leaderboard_rows = [dict(row) for row in leaderboard_ds]
 
     try:
         comparisons_ds = load_dataset(
@@ -271,3 +233,4 @@ def _build_pair_summary(comparisons: list[dict[str, Any]]) -> str:
         wins, losses, ties = counts["W"], counts["L"], counts["T"]
         parts.append(f"**{short_a}** vs **{short_b}**: {wins}W {losses}L {ties}T")
     return " | ".join(parts)
+

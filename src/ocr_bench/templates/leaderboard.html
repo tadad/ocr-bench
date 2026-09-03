@@ -5,15 +5,10 @@
 <p style="font-size: 0.8rem; color: #888; margin-top: 0;"><a href="https://huggingface.co/datasets/{{ repo_id }}" style="color: #888; text-decoration: underline;" target="_blank">{{ repo_id }}</a></p>
 
 <p style="font-size: 0.82rem; color: #999; line-height: 1.5; max-width: 48rem; margin: 0.75rem 0 1rem;">
-  {% if has_judge %}
   Rankings are computed using <strong style="color: #bbb;">Bradley-Terry MLE</strong> from pairwise comparisons judged by a vision-language model.
   The judge sees the original document image alongside two anonymised OCR outputs and picks the more faithful transcription.
   Browse the <a href="/comparisons" style="color: #aaa;">comparisons</a> to see the evidence — and vote yourself to build a Human ELO column.
   Human votes are stored locally for this session only and will reset when the server restarts.
-  {% endif %}
-  {% if has_metrics %}
-  CER and WER compare OCR output with ground-truth transcriptions; lower values are better.
-  {% endif %}
 </p>
 
 <table>
@@ -22,19 +17,12 @@
       <th>#</th>
       <th>Model</th>
       <th class="num">Params</th>
-      {% if has_judge %}
       <th class="num">Judge ELO</th>
       {% if has_ci %}<th class="num">95% CI</th>{% endif %}
       <th class="num">Wins</th>
       <th class="num">Losses</th>
       <th class="num">Ties</th>
       <th class="num">Win%</th>
-      {% endif %}
-      {% if has_metrics %}
-      <th class="num">CER</th>
-      <th class="num">WER</th>
-      <th class="num">GT Samples</th>
-      {% endif %}
       {% if has_human_elo %}
       <th class="num">Human ELO</th>
       <th class="num">H-Win%</th>
@@ -52,19 +40,12 @@
         {% if row.preferred_over %}<span title="Parameter-efficient practical preference over {{ row.preferred_over }}; overlapping CIs, not an equivalence claim" style="color: #6fa8dc;">★</span>{% endif %}
       </td>
       <td class="num">{{ row.params if row.params else "—" }}</td>
-      {% if has_judge %}
       <td class="num">{{ row.elo if row.elo is not none else "—" }}</td>
       {% if has_ci %}<td class="num">{% if row.elo_low is not none %}{{ row.elo_low }}&ndash;{{ row.elo_high }}{% else %}—{% endif %}</td>{% endif %}
       <td class="num">{{ row.wins if row.status != "failed" else "—" }}</td>
       <td class="num">{{ row.losses if row.status != "failed" else "—" }}</td>
       <td class="num">{{ row.ties if row.status != "failed" else "—" }}</td>
       <td class="num">{% if row.win_pct is not none %}{{ row.win_pct }}%{% else %}—{% endif %}</td>
-      {% endif %}
-      {% if has_metrics %}
-      <td class="num">{% if row.cer is not none %}{{ "%.4f"|format(row.cer) }}{% else %}—{% endif %}</td>
-      <td class="num">{% if row.wer is not none %}{{ "%.4f"|format(row.wer) }}{% else %}—{% endif %}</td>
-      <td class="num">{{ row.evaluated_samples if row.evaluated_samples is not none else "—" }}</td>
-      {% endif %}
       {% if has_human_elo %}
       <td class="num">{{ row.human_elo if row.human_elo is not none else "—" }}</td>
       <td class="num">{{ row.human_win_pct if row.human_win_pct is not none else "—" }}</td>

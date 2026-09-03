@@ -747,8 +747,6 @@ class TestBenchParser:
         assert args.criteria is None  # None sentinel; resolves to default later
         assert args.criteria_file is None
         assert args.max_samples is None
-        assert args.reference_column is None
-        assert args.metric_text_mode == "normalized"
         assert args.seed == 42
         assert args.adaptive_strategy == "balanced"
         assert args.size_tie_ratio is None
@@ -797,7 +795,6 @@ class TestCmdBench:
             return jobs
 
         monkeypatch.setattr(cli, "cmd_run", rec_run)
-        monkeypatch.setattr(cli, "cmd_score", lambda a: calls.append(("score", a)))
         monkeypatch.setattr(cli, "cmd_judge", lambda a: calls.append(("judge", a)))
         monkeypatch.setattr(cli, "cmd_view", lambda a: calls.append(("view", a)))
         return calls
@@ -824,28 +821,6 @@ class TestCmdBench:
         cli.cmd_bench(args)
         assert [c[0] for c in calls] == ["run", "judge"]
         assert calls[1][1].no_publish is True
-
-    def test_reference_column_adds_score_phase_before_judge(self, monkeypatch):
-        calls = self._patch(monkeypatch)
-        args = build_parser().parse_args(
-            [
-                "bench",
-                "user/imgs",
-                "user/out",
-                "--reference-column",
-                "reference",
-                "--metric-text-mode",
-                "raw",
-            ]
-        )
-        cli.cmd_bench(args)
-
-        assert [call[0] for call in calls] == ["run", "score", "judge", "view"]
-        score_args = calls[1][1]
-        assert score_args.dataset == "user/out"
-        assert score_args.reference_column == "reference"
-        assert score_args.metric_text_mode == "raw"
-        assert score_args.from_prs is True
 
     def test_threads_shared_flags(self, monkeypatch):
         calls = self._patch(monkeypatch)

@@ -433,17 +433,6 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument(
         "--max-samples", type=int, default=None, help="Per-model sample limit (also caps judging)"
     )
-    bench.add_argument(
-        "--reference-column",
-        default=None,
-        help="Optional ground-truth column; compute CER/WER before judging",
-    )
-    bench.add_argument(
-        "--metric-text-mode",
-        choices=["normalized", "raw"],
-        default="normalized",
-        help="CER/WER text preparation when --reference-column is set",
-    )
     bench.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
     bench.add_argument(
         "--judge-text-mode",
@@ -875,9 +864,8 @@ def _load_evaluation_dataset(
 ) -> tuple[Dataset, dict[str, str], bool]:
     """Load OCR outputs for judge/score using one shared discovery policy.
 
-    Returns ``(dataset, ocr_columns, from_prs)``. Keeping discovery shared is
-    important: a metric leaderboard and a VLM leaderboard must evaluate the
-    same model configs and source-row ordering to be meaningfully compared.
+    Returns ``(dataset, ocr_columns, from_prs)`` so both commands support the
+    same flat, config-based, and pull-request-backed dataset layouts.
     """
     merge = args.merge
     from_prs = False
@@ -1939,7 +1927,7 @@ def cmd_publish(args: argparse.Namespace) -> None:
 
 
 def cmd_bench(args: argparse.Namespace) -> None:
-    """One command: run OCR models, optionally score, judge, then view.
+    """One command: run OCR models, judge them, then open the viewer.
 
     Chains ``run`` → ``judge`` → ``view``, threading the shared flags through
     each phase. Sub-namespaces are built through :func:`build_parser` so the
@@ -1961,8 +1949,7 @@ def cmd_bench(args: argparse.Namespace) -> None:
         run_argv += ["--models", *args.models]
     if args.max_samples is not None:
         run_argv += ["--max-samples", str(args.max_samples)]
-    phase_count = 4 if args.reference_column else 3
-    console.rule(f"[bold]1/{phase_count} Run[/bold]")
+    console.rule("[bold]1/3 Run[/bold]")
     jobs = cmd_run(parser.parse_args(run_argv)) or []
 
     # Abort before judging if any model failed — a silently incomplete
@@ -1984,29 +1971,7 @@ def cmd_bench(args: argparse.Namespace) -> None:
         )
         return
 
-    # --- Optional phase 2: exact metrics against carried-through ground truth ---
-    phase = 2
-    if args.reference_column:
-        score_argv = [
-            "score",
-            args.output_repo,
-            "--from-prs",
-            "--reference-column",
-            args.reference_column,
-            "--metric-text-mode",
-            args.metric_text_mode,
-            "--seed",
-            str(args.seed),
-        ]
-        if args.max_samples is not None:
-            score_argv += ["--max-samples", str(args.max_samples)]
-        if args.no_publish:
-            score_argv.append("--no-publish")
-        console.rule(f"[bold]{phase}/{phase_count} Score[/bold]")
-        cmd_score(parser.parse_args(score_argv))
-        phase += 1
-
-    # --- Judge the OCR outputs (from the PRs the run just opened) ---
+    # --- Phase 2: judge the OCR outputs (from the PRs the run just opened) ---
     judge_argv = [
         "judge",
         args.output_repo,
@@ -2034,9 +1999,8 @@ def cmd_bench(args: argparse.Namespace) -> None:
         judge_argv += ["--max-samples", str(args.max_samples)]
     if args.no_publish:
         judge_argv.append("--no-publish")
-    console.rule(f"[bold]{phase}/{phase_count} Judge[/bold]")
+    console.rule("[bold]2/3 Judge[/bold]")
     cmd_judge(parser.parse_args(judge_argv))
-    phase += 1
 
     # --- Phase 3: view the results ---
     if args.no_publish:
@@ -2048,7 +2012,7 @@ def cmd_bench(args: argparse.Namespace) -> None:
     results_repo = _resolve_results_repo(args.output_repo, None, False)
     assert results_repo is not None  # no_publish is False past the guard above
     view_argv = ["view", results_repo, "--port", str(args.port), "--host", args.host]
-    console.rule(f"[bold]{phase}/{phase_count} View[/bold]")
+    console.rule("[bold]3/3 View[/bold]")
     cmd_view(parser.parse_args(view_argv))
 
 

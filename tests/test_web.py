@@ -92,19 +92,6 @@ class TestLeaderboard:
         resp = client.get("/leaderboard")
         assert "Judge ELO" in resp.text
 
-    def test_ground_truth_metric_columns_when_available(self, client):
-        rows = client.app.state.viewer.leaderboard_rows
-        rows[0].update({"cer": 0.1234, "wer": 0.25, "evaluated_samples": 10})
-        try:
-            resp = client.get("/leaderboard")
-            assert "CER" in resp.text
-            assert "WER" in resp.text
-            assert "0.1234" in resp.text
-            assert "GT Samples" in resp.text
-        finally:
-            for key in ("cer", "wer", "evaluated_samples"):
-                rows[0].pop(key, None)
-
     def test_parameter_preference_badge_is_visible(self, client):
         client.app.state.viewer.leaderboard_rows[0]["preferred_over"] = (
             "lightonai/LightOnOCR-2-1B (4.0x, n=10)"

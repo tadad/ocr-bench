@@ -27,6 +27,10 @@ def test_normalized_text_flattens_html_whitespace_and_unicode():
     assert normalize_metric_text(decomposed) == "Café one | two"
 
 
+def test_normalized_text_decodes_entities_without_html_tags():
+    assert normalize_metric_text("one&nbsp;&nbsp;two") == "one two"
+
+
 def test_raw_text_only_canonicalizes_unicode_and_line_endings():
     assert normalize_metric_text("Cafe\u0301\r\n  two", "raw") == "Café\n  two"
 

@@ -7,6 +7,7 @@ edit-distance numerators and denominators so published scores remain auditable.
 
 from __future__ import annotations
 
+import html
 import re
 import unicodedata
 from collections.abc import Sequence
@@ -97,7 +98,10 @@ def normalize_metric_text(value: object, mode: MetricTextMode = "normalized") ->
         return text
     if mode != "normalized":
         raise ValueError(f"Unknown metric text mode: {mode}")
-    return _WHITESPACE_RE.sub(" ", normalize_for_judge(text)).strip()
+    # OCR models sometimes emit entities such as ``&nbsp;`` without wrapping
+    # them in HTML tags. The judge flattener only parses text containing known
+    # tags, so decode entities explicitly before collapsing whitespace.
+    return _WHITESPACE_RE.sub(" ", html.unescape(normalize_for_judge(text))).strip()
 
 
 def levenshtein_distance(reference: Sequence[_T], prediction: Sequence[_T]) -> int:

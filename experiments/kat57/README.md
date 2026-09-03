@@ -9,6 +9,16 @@ converter verifies the published ZIP size and MD5, extracts human-transcribed
 line text in XML order, retains the original PAGE XML, writes bounded-memory
 Parquet shards, and uploads each shard before creating the next one.
 
+## Published artifacts
+
+- [`tadad/kat57-ground-truth`](https://huggingface.co/datasets/tadad/kat57-ground-truth)
+  is the complete conversion: 10,695 rows in 84 Parquet shards. The Hub dataset
+  server reports the expected row count and no pending, failed, or partial work.
+- [`tadad/kat57-ocr-bench-results`](https://huggingface.co/datasets/tadad/kat57-ocr-bench-results)
+  is a 50-card end-to-end smoke test. Tesseract OCR outputs were scored against
+  the references and published as `metrics`, `metric_details`, and
+  `metric_metadata` configs.
+
 Run it on a cheap CPU Job; `cpu-basic` has just enough disk because only the
 source archive and one output shard coexist:
 

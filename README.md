@@ -100,7 +100,7 @@ When exact metrics and VLM results share a results repository, the viewer shows 
 
 ### Kat57 ground truth
 
-[`experiments/kat57`](experiments/kat57) contains a bounded-memory converter for Lund University Library's [Kat57 PAGE XML release](https://zenodo.org/records/14679534). It turns the 10,695 manually transcribed catalogue cards into a Hugging Face image-and-reference dataset suitable for `ocr-bench run` and `ocr-bench score`.
+[`experiments/kat57`](experiments/kat57) contains a bounded-memory converter for Lund University Library's [Kat57 PAGE XML release](https://zenodo.org/records/14679534). It turns the 10,695 manually transcribed catalogue cards into a Hugging Face image-and-reference dataset suitable for `ocr-bench run` and `ocr-bench score`; the completed conversion is available as [`tadad/kat57-ground-truth`](https://huggingface.co/datasets/tadad/kat57-ground-truth).
 
 ## Available models
 

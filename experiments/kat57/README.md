@@ -18,6 +18,10 @@ Parquet shards, and uploads each shard before creating the next one.
   is a 50-card end-to-end smoke test. Tesseract OCR outputs were scored against
   the references and published as `metrics`, `metric_details`, and
   `metric_metadata` configs.
+- [`tadad/kat57-ocr-bench-500-results`](https://huggingface.co/datasets/tadad/kat57-ocr-bench-500-results)
+  is the comparative acceptance run: 16 OCR models scored on a deterministic
+  500-card sample, for 8,000 reference-based evaluations. It contains CER/WER
+  results only; no VLM judge or ELO results are part of the Kat57 benchmark.
 
 Run it on a cheap CPU Job; `cpu-basic` has just enough disk because only the
 source archive and one output shard coexist:

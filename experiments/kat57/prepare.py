@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import math
 import os
 import urllib.request
@@ -28,7 +29,7 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 from datasets import Dataset, Features, Image, Sequence, Value
-from huggingface_hub import HfApi, get_token
+from huggingface_hub import HfApi, get_token, hf_hub_download
 from tqdm import tqdm
 
 ZENODO_RECORD = "https://zenodo.org/records/14679534"
@@ -37,6 +38,7 @@ ARCHIVE_FILENAME = "kat57-gt-dataset.zip"
 ARCHIVE_SIZE = 36_301_215_824
 ARCHIVE_MD5 = "0895d5785cd0ddf9f9c6488484ac447e"
 LICENSE = "cc-by-4.0"
+MANIFEST_PATH = "conversion-manifest.json"
 
 FEATURES = Features(
     {
@@ -167,6 +169,32 @@ def deterministic_sample(pairs: list[CardPair], sample_size: int, seed: int) -> 
 
     selected = sorted(pairs, key=sample_key)[:sample_size]
     return sorted(selected, key=lambda pair: pair.card_id)
+
+
+def conversion_manifest(
+    pairs: list[CardPair],
+    *,
+    source_count: int,
+    shard_size: int,
+    max_samples: int | None,
+    sample_seed: int | None,
+) -> dict[str, object]:
+    """Describe the exact conversion layout so resume cannot mix runs."""
+    membership = hashlib.sha256(
+        "\n".join(pair.card_id for pair in pairs).encode()
+    ).hexdigest()
+    return {
+        "version": 1,
+        "source_archive_md5": ARCHIVE_MD5,
+        "source_count": source_count,
+        "example_count": len(pairs),
+        "shard_size": shard_size,
+        "shard_count": math.ceil(len(pairs) / shard_size),
+        "max_samples": max_samples,
+        "sample_seed": sample_seed,
+        "selection": "seeded-sha256" if sample_seed is not None else "prefix",
+        "selected_ids_sha256": membership,
+    }
 
 
 def md5sum(path: Path) -> str:
@@ -332,6 +360,13 @@ def publish(
                 else pairs[:max_samples]
             )
         shard_count = math.ceil(len(pairs) / shard_size)
+        manifest = conversion_manifest(
+            pairs,
+            source_count=source_count,
+            shard_size=shard_size,
+            max_samples=max_samples,
+            sample_seed=sample_seed,
+        )
         expected_shards = {
             f"data/train-{index:05d}-of-{shard_count:05d}.parquet" for index in range(shard_count)
         }
@@ -340,6 +375,33 @@ def publish(
             raise RuntimeError(
                 "Existing shard layout does not match this run; use a new empty repo. "
                 f"Unexpected examples: {sorted(stale)[:3]}"
+            )
+        if MANIFEST_PATH in existing_files:
+            manifest_file = hf_hub_download(
+                repo_id,
+                MANIFEST_PATH,
+                repo_type="dataset",
+                token=token,
+            )
+            with Path(manifest_file).open() as file:
+                existing_manifest = json.load(file)
+            if existing_manifest != manifest:
+                raise RuntimeError(
+                    "Existing conversion manifest does not match this run; "
+                    "use the original arguments or a new empty repo"
+                )
+        elif existing_shards:
+            raise RuntimeError(
+                "Existing shards have no conversion manifest, so their parameters "
+                "and membership cannot be verified; use a new empty repo"
+            )
+        else:
+            api.upload_file(
+                path_or_fileobj=(json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode(),
+                path_in_repo=MANIFEST_PATH,
+                repo_id=repo_id,
+                repo_type="dataset",
+                commit_message="Record Kat57 conversion manifest",
             )
 
         print(f"Converting {len(pairs):,} cards into {shard_count} shards")

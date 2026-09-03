@@ -95,7 +95,7 @@ To avoid wasting judge calls on uninformative pairs, the judge skips comparisons
 
 ### Kat57 ground truth
 
-[`experiments/kat57`](experiments/kat57) contains a bounded-memory converter for Lund University Library's [Kat57 PAGE XML release](https://zenodo.org/records/14679534). It turns the 10,695 manually transcribed catalogue cards into a Hugging Face image-and-reference dataset suitable for `ocr-bench run` and `ocr-bench score`; the completed conversion is available as [`tadad/kat57-ground-truth`](https://huggingface.co/datasets/tadad/kat57-ground-truth). The published 500-card acceptance benchmark reports CER/WER only and does not use VLM judging or ELO.
+[`experiments/kat57`](experiments/kat57) contains a bounded-memory converter for Lund University Library's [Kat57 PAGE XML release](https://zenodo.org/records/14679534). It turns the 10,695 manually transcribed catalogue cards into a Hugging Face image-and-reference dataset suitable for `ocr-bench run` and `ocr-bench score`; the completed conversion is available as [`tadad/kat57-ground-truth`](https://huggingface.co/datasets/tadad/kat57-ground-truth). The [published 500-card acceptance benchmark](https://huggingface.co/datasets/tadad/kat57-ocr-bench-500-results) reports CER/WER only and documents the limitations of applying sequence metrics to nonlinear catalogue cards.
 
 ## Available models
 

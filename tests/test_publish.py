@@ -66,7 +66,6 @@ def _make_metric_result() -> MetricResult:
             }
         ],
         reference_column="reference",
-        text_mode="normalized",
     )
 
 
@@ -788,10 +787,7 @@ class TestPublishMetricResults:
             _make_metric_result(),
             source_dataset="user/source",
             source_split="validation",
-            max_samples=10,
-            seed=7,
             from_prs=True,
-            license_id="cc-by-4.0",
         )
 
         aggregate_ds.push_to_hub.assert_called_once_with(
@@ -805,9 +801,7 @@ class TestPublishMetricResults:
         )
         metadata_row = mock_dataset.from_list.call_args_list[-1].args[0][0]
         assert metadata_row["reference_column"] == "reference"
-        assert metadata_row["metric_text_mode"] == "normalized"
-        assert metadata_row["seed"] == 7
-        assert metadata_row["license"] == "cc-by-4.0"
+        assert metadata_row["normalization"] == "NFC, flattened HTML, collapsed whitespace"
 
     @patch(
         "ocr_bench.publish.load_existing_metric_metadata",
@@ -823,8 +817,6 @@ class TestPublishMetricResults:
                 _make_metric_result(),
                 source_dataset="user/source",
                 source_split="train",
-                max_samples=1,
-                seed=42,
                 from_prs=False,
             )
 

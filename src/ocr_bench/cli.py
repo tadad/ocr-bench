@@ -325,33 +325,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Merge PRs to main after discovery (default: load via revision)",
     )
     score.add_argument(
-        "--max-samples",
-        type=_positive_int,
-        default=None,
-        help="Maximum source rows to score",
-    )
-    score.add_argument("--seed", type=int, default=42, help="Sampling seed (default: 42)")
-    score.add_argument(
-        "--metric-text-mode",
-        choices=["normalized", "raw"],
-        default="normalized",
-        help=(
-            "Text preparation for CER/WER (default: normalized). Normalized mode "
-            "flattens known HTML and collapses whitespace; raw preserves formatting."
-        ),
-    )
-    score.add_argument(
         "--save-results",
         default=None,
         help="HF repo for metric results (default: {dataset}-results)",
     )
     score.add_argument(
         "--no-publish", action="store_true", help="Print scores without publishing"
-    )
-    score.add_argument(
-        "--license",
-        default=None,
-        help="License identifier for published derived metrics, e.g. cc-by-4.0",
     )
 
     # --- run subcommand ---
@@ -943,10 +922,7 @@ def print_metric_leaderboard(result: MetricResult) -> None:
             str(summary.skipped_samples),
         )
     console.print(table)
-    console.print(
-        f"[dim]Reference: {result.reference_column}; text mode: {result.text_mode}; "
-        "lower CER/WER is better.[/dim]"
-    )
+    console.print(f"[dim]Reference: {result.reference_column}; lower is better.[/dim]")
 
 
 def cmd_score(args: argparse.Namespace) -> None:
@@ -957,9 +933,6 @@ def cmd_score(args: argparse.Namespace) -> None:
             ds,
             ocr_columns,
             args.reference_column,
-            text_mode=args.metric_text_mode,
-            max_samples=args.max_samples,
-            seed=args.seed,
         )
     except ValueError as exc:
         raise DatasetError(str(exc)) from exc
@@ -980,10 +953,7 @@ def cmd_score(args: argparse.Namespace) -> None:
             result,
             source_dataset=args.dataset,
             source_split=args.split,
-            max_samples=args.max_samples or len(ds),
-            seed=args.seed,
             from_prs=from_prs,
-            license_id=args.license,
         )
         console.print(f"\nMetrics published to [bold]{results_repo}[/bold]")
 

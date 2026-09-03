@@ -31,25 +31,6 @@ def test_normalized_text_decodes_entities_without_html_tags():
     assert normalize_metric_text("one&nbsp;&nbsp;two") == "one two"
 
 
-def test_raw_text_only_canonicalizes_unicode_and_line_endings():
-    assert normalize_metric_text("Cafe\u0301\r\n  two", "raw") == "Café\n  two"
-
-
-def test_unknown_text_mode_fails():
-    with pytest.raises(ValueError, match="Unknown metric text mode"):
-        normalize_metric_text("text", "wrong")  # type: ignore[arg-type]
-
-
-def test_raw_mode_skips_whitespace_only_references():
-    dataset = Dataset.from_dict({"reference": [" \n\t"], "ocr": ["text"]})
-
-    result = score_dataset(dataset, {"ocr": "model"}, "reference", text_mode="raw")
-
-    assert result.summaries[0].evaluated_samples == 0
-    assert result.summaries[0].skipped_samples == 1
-    assert result.details == []
-
-
 def test_score_dataset_uses_corpus_totals_and_skips_empty_references():
     dataset = Dataset.from_dict(
         {
@@ -121,29 +102,6 @@ def test_reference_only_column_map_fails_cleanly():
 
     with pytest.raises(ValueError, match="No OCR output columns remain"):
         score_dataset(dataset, {"text": "text"}, "text")
-
-
-def test_max_samples_limits_scoring():
-    dataset = Dataset.from_dict({"reference": ["a", "b"], "ocr": ["x", "b"]})
-    summary = score_dataset(dataset, {"ocr": "model"}, "reference", max_samples=1).summaries[0]
-    assert summary.evaluated_samples == 1
-    assert summary.cer == 1
-
-
-def test_sampling_matches_judge_indices_and_keeps_source_index():
-    dataset = Dataset.from_dict(
-        {
-            "id": ["zero", "one", "two", "three"],
-            "reference": ["a", "b", "c", "d"],
-            "ocr": ["a", "b", "c", "d"],
-        }
-    )
-    result = score_dataset(
-        dataset, {"ocr": "model"}, "reference", max_samples=2, seed=7
-    )
-
-    assert [row["sample_idx"] for row in result.details] == [2, 0]
-    assert [row["id"] for row in result.details] == ["two", "zero"]
 
 
 def test_missing_reference_column_fails_cleanly():

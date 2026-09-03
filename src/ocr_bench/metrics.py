@@ -12,14 +12,12 @@ import re
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal, TypeVar
+from typing import TypeVar
 
 from datasets import Dataset
 from rapidfuzz.distance import Levenshtein
 
-from ocr_bench.judge import is_sentinel, normalize_for_judge, sample_indices
-
-MetricTextMode = Literal["normalized", "raw"]
+from ocr_bench.judge import is_sentinel, normalize_for_judge
 
 _WHITESPACE_RE = re.compile(r"\s+")
 _T = TypeVar("_T")
@@ -71,19 +69,10 @@ class MetricResult:
     summaries: list[MetricSummary]
     details: list[dict[str, object]]
     reference_column: str
-    text_mode: MetricTextMode
 
 
-def normalize_metric_text(value: object, mode: MetricTextMode = "normalized") -> str:
-    """Coerce text and apply the selected, documented metric normalization.
-
-    Both modes canonicalize Unicode and line endings so visually identical
-    Unicode sequences and platform newlines compare consistently. ``raw`` then
-    leaves all other characters untouched. ``normalized`` additionally uses
-    the judge's conservative HTML flattener and collapses whitespace, making
-    the score insensitive to line wrapping and HTML-vs-plain-text formatting.
-    Case and punctuation are always preserved.
-    """
+def normalize_metric_text(value: object) -> str:
+    """Normalize Unicode, HTML, and whitespace while preserving case/punctuation."""
     if value is None:
         text = ""
     elif isinstance(value, str):
@@ -93,14 +82,7 @@ def normalize_metric_text(value: object, mode: MetricTextMode = "normalized") ->
     else:
         text = str(value)
 
-    text = unicodedata.normalize("NFC", text.replace("\r\n", "\n").replace("\r", "\n"))
-    if mode == "raw":
-        return text
-    if mode != "normalized":
-        raise ValueError(f"Unknown metric text mode: {mode}")
-    # OCR models sometimes emit entities such as ``&nbsp;`` without wrapping
-    # them in HTML tags. The judge flattener only parses text containing known
-    # tags, so decode entities explicitly before collapsing whitespace.
+    text = unicodedata.normalize("NFC", text)
     return _WHITESPACE_RE.sub(" ", html.unescape(normalize_for_judge(text))).strip()
 
 
@@ -113,10 +95,6 @@ def score_dataset(
     dataset: Dataset,
     ocr_columns: dict[str, str],
     reference_column: str,
-    *,
-    text_mode: MetricTextMode = "normalized",
-    max_samples: int | None = None,
-    seed: int = 42,
 ) -> MetricResult:
     """Score every OCR column against a reference transcription column.
 
@@ -145,7 +123,6 @@ def score_dataset(
     if missing:
         raise ValueError(f"OCR columns not found: {', '.join(missing)}")
 
-    indices = sample_indices(len(dataset), max_samples, seed)
     references = dataset[reference_column]
     identifiers = _identifier_values(dataset)
     summaries: list[MetricSummary] = []
@@ -157,19 +134,17 @@ def score_dataset(
         word_errors = reference_words = 0
         evaluated = skipped = failed = 0
 
-        for sample_idx in indices:
+        for sample_idx in range(len(dataset)):
             reference_value = references[sample_idx]
             prediction_value = predictions[sample_idx]
-            reference = normalize_metric_text(reference_value, text_mode)
+            reference = normalize_metric_text(reference_value)
             if not reference.strip():
                 skipped += 1
                 continue
 
-            prediction_raw = normalize_metric_text(prediction_value, "raw")
+            prediction_raw = "" if prediction_value is None else str(prediction_value)
             prediction_failed = is_sentinel(prediction_raw)
-            prediction = (
-                "" if prediction_failed else normalize_metric_text(prediction_value, text_mode)
-            )
+            prediction = "" if prediction_failed else normalize_metric_text(prediction_value)
             ref_words = reference.split()
             pred_words = prediction.split()
             sample_char_errors = levenshtein_distance(reference, prediction)
@@ -216,7 +191,6 @@ def score_dataset(
         summaries=summaries,
         details=details,
         reference_column=reference_column,
-        text_mode=text_mode,
     )
 
 

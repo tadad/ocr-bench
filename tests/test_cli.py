@@ -122,27 +122,12 @@ class TestBuildParser:
         assert args.command == "score"
         assert args.dataset == "user/dataset"
         assert args.reference_column == "reference"
-        assert args.metric_text_mode == "normalized"
-        assert args.seed == 42
         assert args.split == "train"
         assert args.no_publish is False
 
     def test_score_requires_reference_column(self):
         with pytest.raises(SystemExit):
             build_parser().parse_args(["score", "user/dataset"])
-
-    def test_score_max_samples_must_be_positive(self):
-        with pytest.raises(SystemExit):
-            build_parser().parse_args(
-                [
-                    "score",
-                    "user/dataset",
-                    "--reference-column",
-                    "reference",
-                    "--max-samples",
-                    "0",
-                ]
-            )
 
     def test_no_adaptive_flag(self):
         parser = build_parser()
@@ -1076,7 +1061,6 @@ class TestCmdScore:
 
         assert publish.call_args.args[0] == "user/dataset-results"
         assert publish.call_args.kwargs["source_dataset"] == "user/dataset"
-        assert publish.call_args.kwargs["seed"] == 42
 
     def test_empty_reference_fails_cleanly(self, monkeypatch):
         from datasets import Dataset

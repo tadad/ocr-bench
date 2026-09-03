@@ -11,8 +11,6 @@ from PIL import Image as PILImage
 from experiments.kat57.prepare import (
     CardPair,
     card_row,
-    conversion_manifest,
-    dataset_card,
     deterministic_sample,
     discover_pairs,
     parse_page_xml,
@@ -71,7 +69,7 @@ def test_discover_pairs_rejects_unmatched_members(tmp_path, include_image, inclu
     with zipfile.ZipFile(
         make_archive(tmp_path, include_image=include_image, include_xml=include_xml)
     ) as archive:
-        with pytest.raises(ValueError, match="unmatched files"):
+        with pytest.raises(ValueError, match="archive has"):
             discover_pairs(archive)
 
 
@@ -92,36 +90,3 @@ def test_deterministic_sample_rejects_invalid_size(sample_size):
     pairs = [CardPair("kat57-00001-00001", "1.png", "1.xml")]
     with pytest.raises(ValueError, match="Sample size"):
         deterministic_sample(pairs, sample_size, seed=57)
-
-
-def test_dataset_card_documents_sample_provenance():
-    card = dataset_card(500, 4, source_count=10_695, sample_seed=57)
-
-    assert "deterministic 500-card sample" in card
-    assert "10,695 matched PNG/XML pairs" in card
-    assert "seed `57`" in card
-
-
-def test_conversion_manifest_pins_layout_and_membership():
-    pairs = [
-        CardPair(f"kat57-00001-{i:05d}", f"{i}.png", f"{i}.xml") for i in range(5)
-    ]
-
-    manifest = conversion_manifest(
-        pairs,
-        source_count=10_695,
-        shard_size=2,
-        max_samples=5,
-        sample_seed=57,
-    )
-
-    assert manifest["source_count"] == 10_695
-    assert manifest["shard_count"] == 3
-    assert manifest["selection"] == "seeded-sha256"
-    assert manifest["selected_ids_sha256"] != conversion_manifest(
-        list(reversed(pairs)),
-        source_count=10_695,
-        shard_size=2,
-        max_samples=5,
-        sample_seed=57,
-    )["selected_ids_sha256"]

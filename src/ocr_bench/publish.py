@@ -188,10 +188,7 @@ def publish_metric_results(
     *,
     source_dataset: str,
     source_split: str,
-    max_samples: int,
-    seed: int,
     from_prs: bool,
-    license_id: str | None = None,
 ) -> None:
     """Publish aggregate and per-sample CER/WER with run provenance."""
     # Verify the append-only history is readable before replacing any configs.
@@ -214,11 +211,8 @@ def publish_metric_results(
             "source_dataset": source_dataset,
             "source_split": source_split,
             "reference_column": result.reference_column,
-            "metric_text_mode": result.text_mode,
-            "max_samples": max_samples,
-            "seed": seed,
             "from_prs": from_prs,
-            "license": license_id,
+            "normalization": "NFC, flattened HTML, collapsed whitespace",
             "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
         }
     )

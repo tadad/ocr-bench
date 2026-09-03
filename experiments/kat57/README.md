@@ -5,7 +5,7 @@ This experiment converts Lund University Library's 36 GB
 Hugging Face dataset that `ocr-bench run` can consume directly.
 
 The source contains 10,695 PNG images paired with eScriptorium PAGE XML. The
-converter verifies the published ZIP size and MD5, extracts human-transcribed
+converter verifies the published ZIP MD5, extracts human-transcribed
 line text in XML order, retains the original PAGE XML, writes bounded-memory
 Parquet shards, and uploads each shard before creating the next one.
 
@@ -63,5 +63,4 @@ hf jobs uv run \
   --sample-seed 57
 ```
 
-Pass `--resume` only when continuing the same shard layout in the same repo.
-The converter refuses to overwrite an existing or incompatible layout.
+The converter refuses to overwrite a repository that already contains data.

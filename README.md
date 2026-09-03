@@ -46,13 +46,10 @@ uv pip install ocr-bench[viewer]
 # 1. Run OCR models on your dataset
 ocr-bench run <input-dataset> <output-repo> --max-samples 50
 
-# 2. If human transcriptions exist, compute exact CER/WER
-ocr-bench score <output-repo> --reference-column reference
-
-# 3. Judge outputs pairwise with a VLM
+# 2. Judge outputs pairwise with a VLM
 ocr-bench judge <output-repo>
 
-# 4. Browse results + validate
+# 3. Browse results + validate
 ocr-bench view <output-repo>-results
 ```
 
@@ -70,13 +67,13 @@ ocr-bench bench <input-dataset> <output-repo> --max-samples 50
 
 **`ocr-bench run`** launches OCR models on your dataset via [HF Jobs](https://huggingface.co/docs/hub/jobs-overview). Each model writes its output as a PR on the same Hub dataset, keeping everything together without merge conflicts.
 
-**`ocr-bench score`** computes corpus-level Character Error Rate (CER) and Word Error Rate (WER) when the source has a ground-truth transcription column. It uses the same flat/config/PR discovery and alignment checks as the judge, but requires no judge model or API call:
+**`ocr-bench score`** independently computes corpus-level Character Error Rate (CER) and Word Error Rate (WER) when an output dataset has a ground-truth transcription column. It makes no model or judge calls:
 
 ```bash
 ocr-bench score <output-repo> --reference-column reference
 ```
 
-By default, known HTML is flattened, Unicode is canonicalised, and whitespace is collapsed so line wrapping does not dominate the score; case and punctuation remain significant. Use `--metric-text-mode raw` for format-sensitive scores. Failed OCR sentinels count as empty predictions rather than being dropped. The published `metrics`, `metric_details`, and `metric_metadata` configs preserve aggregate scores and provenance.
+Known HTML is flattened, Unicode is canonicalised, and whitespace is collapsed so line wrapping does not dominate the score; case and punctuation remain significant. Failed OCR sentinels count as empty predictions rather than being dropped. The published `metrics`, `metric_details`, and `metric_metadata` configs preserve aggregate scores and provenance.
 
 **`ocr-bench judge`** runs pairwise comparisons using a VLM judge (default: [Qwen3.5-35B-A3B](https://huggingface.co/Qwen/Qwen3.5-35B-A3B) via HF Inference Providers). For each document, the judge sees the original image and two OCR outputs (anonymised as A/B) and picks the better transcription. Results are fit to a [Bradley-Terry model](https://en.wikipedia.org/wiki/Bradley%E2%80%93Terry_model) to produce ELO ratings with bootstrap 95% confidence intervals. Adaptive stopping halts early when rankings are statistically resolved.
 

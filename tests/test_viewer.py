@@ -96,6 +96,57 @@ class TestLoadResults:
         for call in mock_load.call_args_list:
             assert call.kwargs.get("revision") == "sha123"
 
+    @patch("ocr_bench.viewer._latest_revision", return_value="sha123")
+    @patch("ocr_bench.viewer.load_dataset")
+    def test_merges_ground_truth_metrics_by_model(self, mock_load, _mock_rev):
+        leaderboard = MagicMock()
+        leaderboard.__iter__ = MagicMock(return_value=iter(SAMPLE_LEADERBOARD))
+        metrics = MagicMock()
+        metrics.__iter__ = MagicMock(
+            return_value=iter(
+                [
+                    {"model": "DeepSeek-OCR", "cer": 0.1, "wer": 0.2},
+                    {"model": "LightOnOCR-2", "cer": 0.08, "wer": 0.18},
+                ]
+            )
+        )
+        comparisons = MagicMock()
+        comparisons.__iter__ = MagicMock(return_value=iter(SAMPLE_COMPARISONS))
+
+        def side_effect(_repo_id, split=None, name=None, revision=None):
+            if name == "metrics":
+                return metrics
+            if name == "comparisons":
+                return comparisons
+            return leaderboard
+
+        mock_load.side_effect = side_effect
+        rows, _ = load_results("user/results")
+
+        assert rows[0]["cer"] == 0.1
+        assert rows[1]["wer"] == 0.18
+
+    @patch("ocr_bench.viewer._latest_revision", return_value="sha123")
+    @patch("ocr_bench.viewer.load_dataset")
+    def test_metrics_only_repo_is_viewable(self, mock_load, _mock_rev):
+        metrics_rows = [
+            {"model": "model-a", "cer": 0.2, "wer": 0.3, "evaluated_samples": 10}
+        ]
+        metrics = MagicMock()
+        metrics.__iter__ = MagicMock(side_effect=lambda: iter(metrics_rows))
+
+        def side_effect(_repo_id, split=None, name=None, revision=None):
+            if name == "metrics" or name is None:
+                return metrics
+            raise ValueError("missing config")
+
+        mock_load.side_effect = side_effect
+        rows, comparisons = load_results("user/results")
+
+        assert rows[0]["status"] == "metric-only"
+        assert rows[0]["elo"] is None
+        assert comparisons == []
+
 
 class TestLoadSourceMetadata:
     @patch("ocr_bench.viewer._latest_revision", return_value="sha456")

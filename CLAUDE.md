@@ -6,7 +6,7 @@ Rankings change by document type — the best model for manuscript cards is diff
 
 Inspired by [Datalab's Benchmarks + Evals](https://www.datalab.to/blog/datalab-benchmarks-evals) — pairwise VLM-as-judge with Bradley-Terry scoring per document class — but as an open-source, Hub-native tool anyone can run on their own collections.
 
-**Pipeline**: `run` (launch OCR models via HF Jobs) → `audit` (optional read-only pre-judge health check) → `judge` (pairwise VLM comparison → Bradley-Terry ELO) → `view` (leaderboard + human validation). Everything lives on the Hugging Face Hub — no local GPU needed.
+**Pipeline**: `run` (launch OCR models via HF Jobs) → `audit` (optional read-only pre-judge health check) → `score` (optional CER/WER when ground truth exists) → `judge` (pairwise VLM comparison → Bradley-Terry ELO) → `view` (leaderboard + human validation). Everything lives on the Hugging Face Hub — no local GPU needed.
 
 ## Architecture
 
@@ -14,6 +14,7 @@ Inspired by [Datalab's Benchmarks + Evals](https://www.datalab.to/blog/datalab-b
 |--------|-------------|
 | `elo.py` | Bradley-Terry MLE via scipy, bootstrap 95% CIs, ELO scale |
 | `judge.py` | Criteria-profile/custom judge prompts, HTML normalization, truncation disclosure, Comparison dataclass, structured output schema |
+| `metrics.py` | Ground-truth CER/WER, explicit normalization, per-page and corpus totals |
 | `dataset.py` | Flat, config-per-model, PR-based dataset loading, OCR column discovery |
 | `backends.py` | API backends: InferenceProvider + OpenAI-compatible, concurrent calls |
 | `publish.py` | Publish comparisons + leaderboard to Hub; incremental load from existing results |
@@ -22,7 +23,7 @@ Inspired by [Datalab's Benchmarks + Evals](https://www.datalab.to/blog/datalab-b
 | `viewer.py` | Data loading for results viewer (pure functions) |
 | `web.py` | FastAPI + HTMX unified viewer (browse + validate in one app) |
 | `integrity.py` | Input-integrity checks shared by judge guards + `audit`: sentinel/empty/length stats, per-model failure counts, audit report |
-| `cli.py` | CLI: `judge` (incremental + `--full-rejudge`), `run`, `view`, `audit` |
+| `cli.py` | CLI: `judge` (incremental + `--full-rejudge`), `score`, `run`, `view`, `audit` |
 
 ## Tooling
 
@@ -62,5 +63,4 @@ Branch protection is on — all changes go through PRs with CI checks.
 - Ignore list support
 - Judge comparison across different judge models
 - `--focus-pairs`: prioritize overlapping-CI pairs in validation UI
-- CER/WER metrics alongside VLM judge
 - `bench` command: single `ocr-bench bench <input-dataset>` chains run → judge → view

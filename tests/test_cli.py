@@ -115,6 +115,35 @@ class TestBuildParser:
         args = parser.parse_args(["judge", "user/dataset", "--merge"])
         assert args.merge is True
 
+    def test_score_subcommand_defaults(self):
+        args = build_parser().parse_args(
+            ["score", "user/dataset", "--reference-column", "reference"]
+        )
+        assert args.command == "score"
+        assert args.dataset == "user/dataset"
+        assert args.reference_column == "reference"
+        assert args.metric_text_mode == "normalized"
+        assert args.seed == 42
+        assert args.split == "train"
+        assert args.no_publish is False
+
+    def test_score_requires_reference_column(self):
+        with pytest.raises(SystemExit):
+            build_parser().parse_args(["score", "user/dataset"])
+
+    def test_score_max_samples_must_be_positive(self):
+        with pytest.raises(SystemExit):
+            build_parser().parse_args(
+                [
+                    "score",
+                    "user/dataset",
+                    "--reference-column",
+                    "reference",
+                    "--max-samples",
+                    "0",
+                ]
+            )
+
     def test_no_adaptive_flag(self):
         parser = build_parser()
         args = parser.parse_args(["judge", "user/dataset", "--no-adaptive"])
@@ -718,6 +747,8 @@ class TestBenchParser:
         assert args.criteria is None  # None sentinel; resolves to default later
         assert args.criteria_file is None
         assert args.max_samples is None
+        assert args.reference_column is None
+        assert args.metric_text_mode == "normalized"
         assert args.seed == 42
         assert args.adaptive_strategy == "balanced"
         assert args.size_tie_ratio is None
@@ -766,6 +797,7 @@ class TestCmdBench:
             return jobs
 
         monkeypatch.setattr(cli, "cmd_run", rec_run)
+        monkeypatch.setattr(cli, "cmd_score", lambda a: calls.append(("score", a)))
         monkeypatch.setattr(cli, "cmd_judge", lambda a: calls.append(("judge", a)))
         monkeypatch.setattr(cli, "cmd_view", lambda a: calls.append(("view", a)))
         return calls
@@ -792,6 +824,28 @@ class TestCmdBench:
         cli.cmd_bench(args)
         assert [c[0] for c in calls] == ["run", "judge"]
         assert calls[1][1].no_publish is True
+
+    def test_reference_column_adds_score_phase_before_judge(self, monkeypatch):
+        calls = self._patch(monkeypatch)
+        args = build_parser().parse_args(
+            [
+                "bench",
+                "user/imgs",
+                "user/out",
+                "--reference-column",
+                "reference",
+                "--metric-text-mode",
+                "raw",
+            ]
+        )
+        cli.cmd_bench(args)
+
+        assert [call[0] for call in calls] == ["run", "score", "judge", "view"]
+        score_args = calls[1][1]
+        assert score_args.dataset == "user/out"
+        assert score_args.reference_column == "reference"
+        assert score_args.metric_text_mode == "raw"
+        assert score_args.from_prs is True
 
     def test_threads_shared_flags(self, monkeypatch):
         calls = self._patch(monkeypatch)
@@ -988,6 +1042,89 @@ class TestCmdRun:
         out = capsys.readouterr().out
         assert "did not complete" in out
         assert "Evaluate:" not in out  # don't suggest judging a partial run
+
+
+class TestCmdScore:
+    def test_scores_and_prints_without_publishing(self, monkeypatch, capsys):
+        from datasets import Dataset
+
+        dataset = Dataset.from_dict(
+            {"reference": ["hello world"], "ocr": ["hello world"]}
+        )
+        monkeypatch.setattr(
+            cli,
+            "load_flat_dataset",
+            lambda *args, **kwargs: (dataset, {"ocr": "model-a"}),
+        )
+        publish = MagicMock()
+        monkeypatch.setattr(cli, "publish_metric_results", publish)
+        args = build_parser().parse_args(
+            [
+                "score",
+                "user/dataset",
+                "--reference-column",
+                "reference",
+                "--columns",
+                "ocr",
+                "--no-publish",
+            ]
+        )
+
+        cli.cmd_score(args)
+
+        assert "OCR Ground-Truth Metrics" in capsys.readouterr().out
+        publish.assert_not_called()
+
+    def test_publishes_to_shared_results_repo(self, monkeypatch):
+        from datasets import Dataset
+
+        dataset = Dataset.from_dict({"reference": ["abc"], "ocr": ["axc"]})
+        monkeypatch.setattr(
+            cli,
+            "load_flat_dataset",
+            lambda *args, **kwargs: (dataset, {"ocr": "model-a"}),
+        )
+        publish = MagicMock()
+        monkeypatch.setattr(cli, "publish_metric_results", publish)
+        args = build_parser().parse_args(
+            [
+                "score",
+                "user/dataset",
+                "--reference-column",
+                "reference",
+                "--columns",
+                "ocr",
+            ]
+        )
+
+        cli.cmd_score(args)
+
+        assert publish.call_args.args[0] == "user/dataset-results"
+        assert publish.call_args.kwargs["source_dataset"] == "user/dataset"
+        assert publish.call_args.kwargs["seed"] == 42
+
+    def test_empty_reference_fails_cleanly(self, monkeypatch):
+        from datasets import Dataset
+
+        dataset = Dataset.from_dict({"reference": [""], "ocr": ["text"]})
+        monkeypatch.setattr(
+            cli,
+            "load_flat_dataset",
+            lambda *args, **kwargs: (dataset, {"ocr": "model-a"}),
+        )
+        args = build_parser().parse_args(
+            [
+                "score",
+                "user/dataset",
+                "--reference-column",
+                "reference",
+                "--columns",
+                "ocr",
+                "--no-publish",
+            ]
+        )
+        with pytest.raises(DatasetError, match="no non-empty rows"):
+            cli.cmd_score(args)
 
 
 class TestCmdJudgeEmptyGuard:

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import structlog
+from datasets import Dataset
 from openai import OpenAIError
 from rich.console import Console
 from rich.table import Table
@@ -56,11 +57,13 @@ from ocr_bench.judge import (
     sample_indices,
     validate_prompt_template,
 )
+from ocr_bench.metrics import MetricResult, score_dataset
 from ocr_bench.publish import (
     EvalMetadata,
     load_existing_comparisons,
     load_existing_metadata,
     publish_checkpoint,
+    publish_metric_results,
     publish_results,
 )
 
@@ -298,6 +301,59 @@ def build_parser() -> argparse.ArgumentParser:
         help="Number of concurrent judge API calls (default: 1)",
     )
 
+    # --- score subcommand ---
+    score = sub.add_parser(
+        "score", help="Compute CER/WER against ground-truth transcriptions"
+    )
+    score.add_argument("dataset", help="HF dataset repo id with OCR outputs")
+    score.add_argument(
+        "--reference-column",
+        required=True,
+        help="Column containing ground-truth transcriptions",
+    )
+    score.add_argument("--split", default="train", help="Dataset split (default: train)")
+    score.add_argument("--columns", nargs="+", default=None, help="Explicit OCR column names")
+    score.add_argument(
+        "--configs", nargs="+", default=None, help="Config-per-model: list of config names"
+    )
+    score.add_argument(
+        "--from-prs", action="store_true", help="Force PR-based config discovery"
+    )
+    score.add_argument(
+        "--merge",
+        action="store_true",
+        help="Merge PRs to main after discovery (default: load via revision)",
+    )
+    score.add_argument(
+        "--max-samples",
+        type=_positive_int,
+        default=None,
+        help="Maximum source rows to score",
+    )
+    score.add_argument("--seed", type=int, default=42, help="Sampling seed (default: 42)")
+    score.add_argument(
+        "--metric-text-mode",
+        choices=["normalized", "raw"],
+        default="normalized",
+        help=(
+            "Text preparation for CER/WER (default: normalized). Normalized mode "
+            "flattens known HTML and collapses whitespace; raw preserves formatting."
+        ),
+    )
+    score.add_argument(
+        "--save-results",
+        default=None,
+        help="HF repo for metric results (default: {dataset}-results)",
+    )
+    score.add_argument(
+        "--no-publish", action="store_true", help="Print scores without publishing"
+    )
+    score.add_argument(
+        "--license",
+        default=None,
+        help="License identifier for published derived metrics, e.g. cc-by-4.0",
+    )
+
     # --- run subcommand ---
     run = sub.add_parser("run", help="Launch OCR models on a dataset via HF Jobs")
     run.add_argument(
@@ -376,6 +432,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bench.add_argument(
         "--max-samples", type=int, default=None, help="Per-model sample limit (also caps judging)"
+    )
+    bench.add_argument(
+        "--reference-column",
+        default=None,
+        help="Optional ground-truth column; compute CER/WER before judging",
+    )
+    bench.add_argument(
+        "--metric-text-mode",
+        choices=["normalized", "raw"],
+        default="normalized",
+        help="CER/WER text preparation when --reference-column is set",
     )
     bench.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
     bench.add_argument(
@@ -803,13 +870,141 @@ def _existing_preprocessing_provenance(meta_rows: list[dict]) -> tuple[str, int,
     )
 
 
+def _load_evaluation_dataset(
+    args: argparse.Namespace,
+) -> tuple[Dataset, dict[str, str], bool]:
+    """Load OCR outputs for judge/score using one shared discovery policy.
+
+    Returns ``(dataset, ocr_columns, from_prs)``. Keeping discovery shared is
+    important: a metric leaderboard and a VLM leaderboard must evaluate the
+    same model configs and source-row ordering to be meaningfully compared.
+    """
+    merge = args.merge
+    from_prs = False
+
+    if args.configs:
+        ds, ocr_columns = load_config_dataset(
+            args.dataset, args.configs, split=args.split
+        )
+    elif args.columns:
+        ds, ocr_columns = load_flat_dataset(
+            args.dataset, split=args.split, columns=args.columns
+        )
+    elif args.from_prs:
+        config_names, pr_revisions = discover_pr_configs(args.dataset, merge=merge)
+        if not config_names:
+            raise DatasetError("No configs found in open PRs")
+        from_prs = True
+        console.print(f"Discovered {len(config_names)} configs from PRs: {config_names}")
+        ds, ocr_columns = load_config_dataset(
+            args.dataset,
+            config_names,
+            split=args.split,
+            pr_revisions=pr_revisions if not merge else None,
+        )
+    else:
+        pr_configs, pr_revisions = discover_pr_configs(args.dataset, merge=merge)
+        main_configs = discover_configs(args.dataset)
+        config_names = list(pr_configs)
+        for main_config in main_configs:
+            if main_config not in pr_configs:
+                config_names.append(main_config)
+
+        if config_names:
+            if pr_configs:
+                from_prs = True
+                console.print(
+                    f"Auto-detected {len(pr_configs)} configs from PRs: {pr_configs}"
+                )
+            main_only = [config for config in main_configs if config not in pr_configs]
+            if main_only:
+                console.print(
+                    f"Auto-detected {len(main_only)} configs on main: {main_only}"
+                )
+            ds, ocr_columns = load_config_dataset(
+                args.dataset,
+                config_names,
+                split=args.split,
+                pr_revisions=pr_revisions if pr_configs else None,
+            )
+        else:
+            ds, ocr_columns = load_flat_dataset(args.dataset, split=args.split)
+
+    return ds, ocr_columns, from_prs
+
+
+def print_metric_leaderboard(result: MetricResult) -> None:
+    """Print a corpus-level CER/WER table, best scores first."""
+    table = Table(title="OCR Ground-Truth Metrics")
+    table.add_column("Rank", style="bold")
+    table.add_column("Model")
+    table.add_column("CER", justify="right")
+    table.add_column("WER", justify="right")
+    table.add_column("Samples", justify="right")
+    table.add_column("Failed", justify="right")
+    table.add_column("Skipped", justify="right")
+
+    for rank, summary in enumerate(result.summaries, 1):
+        table.add_row(
+            str(rank),
+            summary.model,
+            f"{summary.cer:.4f}",
+            f"{summary.wer:.4f}",
+            str(summary.evaluated_samples),
+            str(summary.failed_outputs),
+            str(summary.skipped_samples),
+        )
+    console.print(table)
+    console.print(
+        f"[dim]Reference: {result.reference_column}; text mode: {result.text_mode}; "
+        "lower CER/WER is better.[/dim]"
+    )
+
+
+def cmd_score(args: argparse.Namespace) -> None:
+    """Load OCR outputs, compute ground-truth metrics, print, and publish."""
+    ds, ocr_columns, from_prs = _load_evaluation_dataset(args)
+    try:
+        result = score_dataset(
+            ds,
+            ocr_columns,
+            args.reference_column,
+            text_mode=args.metric_text_mode,
+            max_samples=args.max_samples,
+            seed=args.seed,
+        )
+    except ValueError as exc:
+        raise DatasetError(str(exc)) from exc
+
+    if not any(summary.evaluated_samples for summary in result.summaries):
+        raise DatasetError(
+            f"Reference column '{args.reference_column}' has no non-empty rows to score"
+        )
+
+    console.print(f"Loaded {len(ds)} samples with {len(result.summaries)} models:")
+    for summary in result.summaries:
+        console.print(f"  {summary.column} → {summary.model}")
+    print_metric_leaderboard(result)
+    results_repo = _resolve_results_repo(args.dataset, args.save_results, args.no_publish)
+    if results_repo:
+        publish_metric_results(
+            results_repo,
+            result,
+            source_dataset=args.dataset,
+            source_split=args.split,
+            max_samples=args.max_samples or len(ds),
+            seed=args.seed,
+            from_prs=from_prs,
+            license_id=args.license,
+        )
+        console.print(f"\nMetrics published to [bold]{results_repo}[/bold]")
+
+
 def cmd_judge(args: argparse.Namespace) -> None:
     """Orchestrate: load → compare → judge → elo → print → publish."""
     # --- Resolve flags ---
     adaptive = not args.no_adaptive
-    merge = args.merge
     results_repo = _resolve_results_repo(args.dataset, args.save_results, args.no_publish)
-    from_prs = False  # track for metadata
     max_comparisons = args.max_comparisons  # global budget; None = uncapped
     adaptive_strategy = args.adaptive_strategy
     if not adaptive and adaptive_strategy != "balanced":
@@ -871,55 +1066,8 @@ def cmd_judge(args: argparse.Namespace) -> None:
     if results_repo:
         console.print(f"Results will be published to [bold]{results_repo}[/bold]")
 
-    # --- Load dataset (cascading auto-detection) ---
-    if args.configs:
-        # Explicit configs — use them directly
-        config_names = args.configs
-        ds, ocr_columns = load_config_dataset(args.dataset, config_names, split=args.split)
-    elif args.columns:
-        # Explicit columns — flat loading
-        ds, ocr_columns = load_flat_dataset(args.dataset, split=args.split, columns=args.columns)
-    elif args.from_prs:
-        # Forced PR discovery
-        config_names, pr_revisions = discover_pr_configs(args.dataset, merge=merge)
-        if not config_names:
-            raise DatasetError("No configs found in open PRs")
-        from_prs = True
-        console.print(f"Discovered {len(config_names)} configs from PRs: {config_names}")
-        ds, ocr_columns = load_config_dataset(
-            args.dataset,
-            config_names,
-            split=args.split,
-            pr_revisions=pr_revisions if not merge else None,
-        )
-    else:
-        # Auto-detect: PRs + main branch configs combined, fall back to flat
-        pr_configs, pr_revisions = discover_pr_configs(args.dataset, merge=merge)
-        main_configs = discover_configs(args.dataset)
-
-        # Combine: PR configs + main configs not already in PRs
-        config_names = list(pr_configs)
-        for mc in main_configs:
-            if mc not in pr_configs:
-                config_names.append(mc)
-
-        if config_names:
-            if pr_configs:
-                from_prs = True
-                console.print(f"Auto-detected {len(pr_configs)} configs from PRs: {pr_configs}")
-            if main_configs:
-                main_only = [c for c in main_configs if c not in pr_configs]
-                if main_only:
-                    console.print(f"Auto-detected {len(main_only)} configs on main: {main_only}")
-            ds, ocr_columns = load_config_dataset(
-                args.dataset,
-                config_names,
-                split=args.split,
-                pr_revisions=pr_revisions if pr_configs else None,
-            )
-        else:
-            # No configs anywhere — fall back to flat loading
-            ds, ocr_columns = load_flat_dataset(args.dataset, split=args.split)
+    # --- Load dataset (shared cascading auto-detection) ---
+    ds, ocr_columns, from_prs = _load_evaluation_dataset(args)
 
     console.print(f"Loaded {len(ds)} samples with {len(ocr_columns)} models:")
     for col, model in ocr_columns.items():
@@ -1791,7 +1939,7 @@ def cmd_publish(args: argparse.Namespace) -> None:
 
 
 def cmd_bench(args: argparse.Namespace) -> None:
-    """One command: run OCR models, judge them, then open the viewer.
+    """One command: run OCR models, optionally score, judge, then view.
 
     Chains ``run`` → ``judge`` → ``view``, threading the shared flags through
     each phase. Sub-namespaces are built through :func:`build_parser` so the
@@ -1813,7 +1961,8 @@ def cmd_bench(args: argparse.Namespace) -> None:
         run_argv += ["--models", *args.models]
     if args.max_samples is not None:
         run_argv += ["--max-samples", str(args.max_samples)]
-    console.rule("[bold]1/3 Run[/bold]")
+    phase_count = 4 if args.reference_column else 3
+    console.rule(f"[bold]1/{phase_count} Run[/bold]")
     jobs = cmd_run(parser.parse_args(run_argv)) or []
 
     # Abort before judging if any model failed — a silently incomplete
@@ -1835,7 +1984,29 @@ def cmd_bench(args: argparse.Namespace) -> None:
         )
         return
 
-    # --- Phase 2: judge the OCR outputs (from the PRs the run just opened) ---
+    # --- Optional phase 2: exact metrics against carried-through ground truth ---
+    phase = 2
+    if args.reference_column:
+        score_argv = [
+            "score",
+            args.output_repo,
+            "--from-prs",
+            "--reference-column",
+            args.reference_column,
+            "--metric-text-mode",
+            args.metric_text_mode,
+            "--seed",
+            str(args.seed),
+        ]
+        if args.max_samples is not None:
+            score_argv += ["--max-samples", str(args.max_samples)]
+        if args.no_publish:
+            score_argv.append("--no-publish")
+        console.rule(f"[bold]{phase}/{phase_count} Score[/bold]")
+        cmd_score(parser.parse_args(score_argv))
+        phase += 1
+
+    # --- Judge the OCR outputs (from the PRs the run just opened) ---
     judge_argv = [
         "judge",
         args.output_repo,
@@ -1863,8 +2034,9 @@ def cmd_bench(args: argparse.Namespace) -> None:
         judge_argv += ["--max-samples", str(args.max_samples)]
     if args.no_publish:
         judge_argv.append("--no-publish")
-    console.rule("[bold]2/3 Judge[/bold]")
+    console.rule(f"[bold]{phase}/{phase_count} Judge[/bold]")
     cmd_judge(parser.parse_args(judge_argv))
+    phase += 1
 
     # --- Phase 3: view the results ---
     if args.no_publish:
@@ -1876,7 +2048,7 @@ def cmd_bench(args: argparse.Namespace) -> None:
     results_repo = _resolve_results_repo(args.output_repo, None, False)
     assert results_repo is not None  # no_publish is False past the guard above
     view_argv = ["view", results_repo, "--port", str(args.port), "--host", args.host]
-    console.rule("[bold]3/3 View[/bold]")
+    console.rule(f"[bold]{phase}/{phase_count} View[/bold]")
     cmd_view(parser.parse_args(view_argv))
 
 
@@ -1992,6 +2164,8 @@ def main() -> None:
     try:
         if args.command == "judge":
             cmd_judge(args)
+        elif args.command == "score":
+            cmd_score(args)
         elif args.command == "run":
             cmd_run(args)
         elif args.command == "view":

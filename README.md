@@ -46,10 +46,13 @@ uv pip install ocr-bench[viewer]
 # 1. Run OCR models on your dataset
 ocr-bench run <input-dataset> <output-repo> --max-samples 50
 
-# 2. Judge outputs pairwise with a VLM
+# 2. If human transcriptions exist, compute exact CER/WER
+ocr-bench score <output-repo> --reference-column reference
+
+# 3. Judge outputs pairwise with a VLM
 ocr-bench judge <output-repo>
 
-# 3. Browse results + validate
+# 4. Browse results + validate
 ocr-bench view <output-repo>-results
 ```
 
@@ -61,11 +64,19 @@ Or chain all three stages in a single call — the fastest way to try ocr-bench 
 ocr-bench bench <input-dataset> <output-repo> --max-samples 50
 ```
 
-`bench` runs the models (waiting for the jobs to finish), judges the outputs, then opens the viewer. It threads the shared flags through each stage: `--models`, `--judge-model` (repeatable for a jury), `--max-samples`, `--seed`, `--adaptive-strategy`, `--size-tie-ratio`, `--no-publish`, and `--port`/`--host` for the viewer. Reach for the individual subcommands when you want finer control over a single stage.
+When ground truth exists, add `--reference-column reference` to score it before judging. `bench` runs the models (waiting for the jobs to finish), optionally computes CER/WER, judges the outputs, then opens the viewer. It threads the shared flags through each stage: `--models`, `--judge-model` (repeatable for a jury), `--reference-column`, `--metric-text-mode`, `--max-samples`, `--seed`, `--adaptive-strategy`, `--size-tie-ratio`, `--no-publish`, and `--port`/`--host` for the viewer. Reach for the individual subcommands when you want finer control over a single stage.
 
 ## How it works
 
 **`ocr-bench run`** launches OCR models on your dataset via [HF Jobs](https://huggingface.co/docs/hub/jobs-overview). Each model writes its output as a PR on the same Hub dataset, keeping everything together without merge conflicts.
+
+**`ocr-bench score`** computes corpus-level Character Error Rate (CER) and Word Error Rate (WER) when the source has a ground-truth transcription column. It uses the same flat/config/PR discovery and alignment checks as the judge, but requires no judge model or API call:
+
+```bash
+ocr-bench score <output-repo> --reference-column reference
+```
+
+By default, known HTML is flattened, Unicode is canonicalised, and whitespace is collapsed so line wrapping does not dominate the score; case and punctuation remain significant. Use `--metric-text-mode raw` for format-sensitive scores. Failed OCR sentinels count as empty predictions rather than being dropped. The published `metrics`, `metric_details`, and `metric_metadata` configs preserve aggregate scores and provenance alongside any VLM leaderboard.
 
 **`ocr-bench judge`** runs pairwise comparisons using a VLM judge (default: [Qwen3.5-35B-A3B](https://huggingface.co/Qwen/Qwen3.5-35B-A3B) via HF Inference Providers). For each document, the judge sees the original image and two OCR outputs (anonymised as A/B) and picks the better transcription. Results are fit to a [Bradley-Terry model](https://en.wikipedia.org/wiki/Bradley%E2%80%93Terry_model) to produce ELO ratings with bootstrap 95% confidence intervals. Adaptive stopping halts early when rankings are statistically resolved.
 
@@ -84,6 +95,12 @@ Targeted allocation is experimental and remains opt-in because it conditions lat
 To avoid wasting judge calls on uninformative pairs, the judge skips comparisons where **both** outputs are shorter than `--min-chars` (default 20 — neither model produced meaningful text), and scores **identical** outputs as an automatic tie without calling the judge. Pass `--min-chars 0` to disable the length filter.
 
 **`ocr-bench view`** serves a local web viewer with a leaderboard, comparison browser, and human validation. Vote on comparisons to cross-check the automated judge with human judgement.
+
+When exact metrics and VLM results share a results repository, the viewer shows CER/WER beside judge ELO. This makes disagreements between edit-distance scores and preference judging visible rather than collapsing them into one number.
+
+### Kat57 ground truth
+
+[`experiments/kat57`](experiments/kat57) contains a bounded-memory converter for Lund University Library's [Kat57 PAGE XML release](https://zenodo.org/records/14679534). It turns the 10,695 manually transcribed catalogue cards into a Hugging Face image-and-reference dataset suitable for `ocr-bench run` and `ocr-bench score`.
 
 ## Available models
 

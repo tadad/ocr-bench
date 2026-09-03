@@ -326,14 +326,31 @@ def create_app(
         sizes = _get_model_sizes()
 
         rows = []
-        ordered_rows = sorted(
-            state.leaderboard_rows,
-            key=lambda r: (
-                r.get("status") != "failed",
-                r.get("elo") if r.get("elo") is not None else float("-inf"),
-            ),
-            reverse=True,
+        has_judge = any(
+            row.get("elo") is not None for row in state.leaderboard_rows
         )
+        has_metrics = any(
+            row.get("cer") is not None or row.get("wer") is not None
+            for row in state.leaderboard_rows
+        )
+        if has_judge:
+            ordered_rows = sorted(
+                state.leaderboard_rows,
+                key=lambda r: (
+                    r.get("status") != "failed",
+                    r.get("elo") if r.get("elo") is not None else float("-inf"),
+                ),
+                reverse=True,
+            )
+        else:
+            ordered_rows = sorted(
+                state.leaderboard_rows,
+                key=lambda r: (
+                    r.get("status") == "failed",
+                    r.get("cer") if r.get("cer") is not None else float("inf"),
+                    r.get("wer") if r.get("wer") is not None else float("inf"),
+                ),
+            )
         rank = 0
         for row in ordered_rows:
             model = row.get("model", "")
@@ -361,6 +378,9 @@ def create_app(
                 "losses": row.get("losses", 0),
                 "ties": row.get("ties", 0),
                 "win_pct": row.get("win_pct"),
+                "cer": row.get("cer"),
+                "wer": row.get("wer"),
+                "evaluated_samples": row.get("evaluated_samples"),
                 "status": status,
                 "failed_outputs": row.get("failed_outputs", 0),
                 "preferred_over": row.get("preferred_over", ""),
@@ -395,6 +415,8 @@ def create_app(
             "repo_id": state.repo_id,
             "rows": rows,
             "has_ci": has_ci,
+            "has_judge": has_judge,
+            "has_metrics": has_metrics,
             "has_human_elo": human_board is not None,
             "chart_points": chart_points,
         })

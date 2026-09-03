@@ -20,6 +20,7 @@ from ocr_bench.adaptive import (
 )
 from ocr_bench.elo import ComparisonResult, Leaderboard, compute_elo
 from ocr_bench.judge import MAX_IMAGE_DIM, MAX_OCR_TEXT_LENGTH
+from ocr_bench.metrics import MetricResult
 from ocr_bench.run import MODEL_REGISTRY
 
 logger = structlog.get_logger()
@@ -109,6 +110,23 @@ def _config_is_absent(repo_id: str, config_name: str) -> bool:
     return not any(path.startswith(f"{config_name}/") for path in files)
 
 
+def _has_metric_configs(repo_id: str) -> bool:
+    """Check whether a results card must retain ground-truth metric configs."""
+    try:
+        files = HfApi().list_repo_files(repo_id, repo_type="dataset")
+    except RepositoryNotFoundError:
+        return False
+    except Exception as exc:
+        raise OSError(
+            f"Could not inspect {repo_id} for metric configs; refusing to replace "
+            "its dataset card"
+        ) from exc
+    return any(
+        path.startswith(("metrics/", "metric_details/", "metric_metadata/"))
+        for path in files
+    )
+
+
 def load_existing_comparisons(repo_id: str) -> list[ComparisonResult]:
     """Load existing comparisons without failing open on uncertain read errors.
 
@@ -164,6 +182,67 @@ def load_existing_metadata(repo_id: str) -> list[dict]:
             f"Existing metadata in {repo_id} could not be loaded; refusing to "
             "overwrite Hub history"
         ) from exc
+
+
+def load_existing_metric_metadata(repo_id: str) -> list[dict]:
+    """Load the append-only metric run log, failing closed on uncertain reads."""
+    try:
+        ds = load_dataset(repo_id, name="metric_metadata", split="train")
+        return [dict(row) for row in ds]
+    except Exception as exc:
+        if _config_is_absent(repo_id, "metric_metadata"):
+            logger.info("no_existing_metric_metadata", repo=repo_id, reason=str(exc))
+            return []
+        raise OSError(
+            f"Existing metric metadata in {repo_id} could not be loaded; refusing "
+            "to overwrite Hub history"
+        ) from exc
+
+
+def publish_metric_results(
+    repo_id: str,
+    result: MetricResult,
+    *,
+    source_dataset: str,
+    source_split: str,
+    max_samples: int,
+    seed: int,
+    from_prs: bool,
+    license_id: str | None = None,
+) -> None:
+    """Publish aggregate and per-sample CER/WER beside any judge results."""
+    # Verify the append-only history is readable before replacing any configs.
+    # Otherwise a transient metadata read failure could leave new scores without
+    # the provenance row that explains how they were produced.
+    metadata_rows = load_existing_metric_metadata(repo_id)
+
+    aggregate_rows = [summary.as_row() for summary in result.summaries]
+    Dataset.from_list(aggregate_rows).push_to_hub(repo_id, config_name="metrics")
+    logger.info("published_metrics", repo=repo_id, n=len(aggregate_rows))
+
+    if result.details:
+        Dataset.from_list(result.details).push_to_hub(
+            repo_id, config_name="metric_details"
+        )
+        logger.info("published_metric_details", repo=repo_id, n=len(result.details))
+
+    metadata_rows.append(
+        {
+            "source_dataset": source_dataset,
+            "source_split": source_split,
+            "reference_column": result.reference_column,
+            "metric_text_mode": result.text_mode,
+            "max_samples": max_samples,
+            "seed": seed,
+            "from_prs": from_prs,
+            "license": license_id,
+            "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
+        }
+    )
+    Dataset.from_list(_align_metadata_rows(metadata_rows)).push_to_hub(
+        repo_id, config_name="metric_metadata"
+    )
+    logger.info("published_metric_metadata", repo=repo_id, n=len(metadata_rows))
 
 
 def _get_model_sizes() -> dict[str, str]:
@@ -327,6 +406,8 @@ def publish_results(
       - ``metadata``: Append-only run log. New row is appended to
         ``existing_metadata``.
     """
+    include_metrics = _has_metric_configs(repo_id)
+
     # Comparisons. Canonicalise preserved out-of-grid rows independently so
     # they remain durable without entering this board's ELO fit or annotations.
     comparison_rows = list(board.comparison_log)
@@ -377,7 +458,14 @@ def publish_results(
     logger.info("published_metadata", repo=repo_id, n=len(all_meta))
 
     # README — auto-generated dataset card with leaderboard
-    readme = _build_readme(repo_id, rows, board, metadata, license_id=license_id)
+    readme = _build_readme(
+        repo_id,
+        rows,
+        board,
+        metadata,
+        license_id=license_id,
+        include_metrics=include_metrics,
+    )
     api = HfApi()
     api.upload_file(
         path_or_fileobj=readme.encode(),
@@ -394,6 +482,7 @@ def _build_readme(
     board: Leaderboard,
     metadata: EvalMetadata,
     license_id: str | None = None,
+    include_metrics: bool = False,
 ) -> str:
     """Build a dataset card README with the leaderboard table."""
     has_ci = bool(board.elo_ci)
@@ -458,6 +547,24 @@ def _build_readme(
         "    data_files:",
         "      - split: train",
         "        path: metadata/train-*.parquet",
+        *(
+            [
+                "  - config_name: metrics",
+                "    data_files:",
+                "      - split: train",
+                "        path: metrics/train-*.parquet",
+                "  - config_name: metric_details",
+                "    data_files:",
+                "      - split: train",
+                "        path: metric_details/train-*.parquet",
+                "  - config_name: metric_metadata",
+                "    data_files:",
+                "      - split: train",
+                "        path: metric_metadata/train-*.parquet",
+            ]
+            if include_metrics
+            else []
+        ),
         "---",
         "",
         f"# OCR Bench Results: {source_short}",
@@ -587,6 +694,18 @@ def _build_readme(
         "— full pairwise comparison log",
         f"- `load_dataset(\"{repo_id}\", name=\"metadata\")` "
         "— evaluation run history",
+        *(
+            [
+                f"- `load_dataset(\"{repo_id}\", name=\"metrics\")` "
+                "— corpus-level CER/WER results",
+                f"- `load_dataset(\"{repo_id}\", name=\"metric_details\")` "
+                "— per-sample CER/WER audit trail",
+                f"- `load_dataset(\"{repo_id}\", name=\"metric_metadata\")` "
+                "— ground-truth scoring run history",
+            ]
+            if include_metrics
+            else []
+        ),
         "",
         "*Generated by [ocr-bench](https://github.com/davanstrien/ocr-bench)*",
     ]

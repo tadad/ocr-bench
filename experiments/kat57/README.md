@@ -45,5 +45,19 @@ hf jobs uv run \
   --private
 ```
 
+For a reproducible benchmark sample drawn across the full archive, combine
+`--max-samples` with `--sample-seed`:
+
+```bash
+hf jobs uv run \
+  --flavor cpu-basic \
+  --timeout 8h \
+  --secrets HF_TOKEN \
+  experiments/kat57/prepare.py \
+  tadad/kat57-ground-truth-500 \
+  --max-samples 500 \
+  --sample-seed 57
+```
+
 Pass `--resume` only when continuing the same shard layout in the same repo.
 The converter refuses to overwrite an existing or incompatible layout.

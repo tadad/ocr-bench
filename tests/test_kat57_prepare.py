@@ -8,7 +8,14 @@ import zipfile
 import pytest
 from PIL import Image as PILImage
 
-from experiments.kat57.prepare import card_row, discover_pairs, parse_page_xml
+from experiments.kat57.prepare import (
+    CardPair,
+    card_row,
+    dataset_card,
+    deterministic_sample,
+    discover_pairs,
+    parse_page_xml,
+)
 
 PAGE_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
 <PcGts xmlns="http://schema.primaresearch.org/PAGE/gts/pagecontent/2019-07-15">
@@ -65,3 +72,30 @@ def test_discover_pairs_rejects_unmatched_members(tmp_path, include_image, inclu
     ) as archive:
         with pytest.raises(ValueError, match="unmatched files"):
             discover_pairs(archive)
+
+
+def test_deterministic_sample_is_reproducible_and_returned_in_source_order():
+    pairs = [CardPair(f"kat57-00001-{i:05d}", f"{i}.png", f"{i}.xml") for i in range(20)]
+
+    first = deterministic_sample(pairs, 5, seed=57)
+    second = deterministic_sample(list(reversed(pairs)), 5, seed=57)
+    different = deterministic_sample(pairs, 5, seed=58)
+
+    assert first == second
+    assert first == sorted(first, key=lambda pair: pair.card_id)
+    assert first != different
+
+
+@pytest.mark.parametrize("sample_size", [0, 21])
+def test_deterministic_sample_rejects_invalid_size(sample_size):
+    pairs = [CardPair("kat57-00001-00001", "1.png", "1.xml")]
+    with pytest.raises(ValueError, match="Sample size"):
+        deterministic_sample(pairs, sample_size, seed=57)
+
+
+def test_dataset_card_documents_sample_provenance():
+    card = dataset_card(500, 4, source_count=10_695, sample_seed=57)
+
+    assert "deterministic 500-card sample" in card
+    assert "10,695 matched PNG/XML pairs" in card
+    assert "seed `57`" in card

@@ -149,6 +149,26 @@ def iter_shards(
         yield start // shard_size, Dataset.from_list(rows, features=FEATURES)
 
 
+def deterministic_sample(pairs: list[CardPair], sample_size: int, seed: int) -> list[CardPair]:
+    """Select a reproducible pseudo-random subset, returned in source order.
+
+    Ranking stable card identifiers by a seeded SHA-256 digest avoids depending
+    on Python's random/shuffle implementation. Sorting the selected cards back
+    into identifier order keeps the published dataset easy to inspect while the
+    membership remains an unbiased deterministic sample.
+    """
+    if sample_size < 1:
+        raise ValueError("Sample size must be at least 1")
+    if sample_size > len(pairs):
+        raise ValueError(f"Sample size {sample_size} exceeds the {len(pairs)} available cards")
+
+    def sample_key(pair: CardPair) -> bytes:
+        return hashlib.sha256(f"{seed}\0{pair.card_id}".encode()).digest()
+
+    selected = sorted(pairs, key=sample_key)[:sample_size]
+    return sorted(selected, key=lambda pair: pair.card_id)
+
+
 def md5sum(path: Path) -> str:
     digest = hashlib.md5()  # noqa: S324 - verifying Zenodo's published checksum
     with path.open("rb") as file:
@@ -199,8 +219,24 @@ def download_archive(destination: Path) -> Path:
     return destination
 
 
-def dataset_card(example_count: int, shard_count: int) -> str:
+def dataset_card(
+    example_count: int,
+    shard_count: int,
+    *,
+    source_count: int,
+    sample_seed: int | None,
+) -> str:
     """Build the attributed data-only Hub card."""
+    if sample_seed is None:
+        scope = f"{example_count:,} scanned catalogue"
+        conversion = f"The source archive contains {source_count:,} matched PNG/XML pairs."
+    else:
+        scope = f"a deterministic {example_count:,}-card sample of scanned catalogue"
+        conversion = (
+            f"The source archive contains {source_count:,} matched PNG/XML pairs. "
+            f"This copy selects {example_count:,} cards by ranking stable card identifiers "
+            f"with a seeded SHA-256 digest (seed `{sample_seed}`)."
+        )
     return f"""---
 license: {LICENSE}
 language:
@@ -226,7 +262,7 @@ configs:
 # Kat57 ground truth
 
 Hugging Face conversion of Lund University Library's
-[Kat57 ground-truth release]({ZENODO_RECORD}): {example_count:,} scanned catalogue
+[Kat57 ground-truth release]({ZENODO_RECORD}): {scope}
 cards with manually corrected PAGE XML transcriptions.
 
 The cards come from Catalogue -1957, Lund University Library's alphabetical
@@ -243,8 +279,8 @@ typewritten and handwritten text in several languages.
 
 ## Conversion
 
-The source archive contains {example_count:,} matched PNG/XML pairs. This copy
-is stored in {shard_count} Parquet shards and was produced by the reproducible
+{conversion}
+This copy is stored in {shard_count} Parquet shards and was produced by the reproducible
 Kat57 converter in [`tadad/ocr-bench`](https://github.com/tadad/ocr-bench/tree/feat/cer-wer-kat57/experiments/kat57).
 No OCR or synthetic labels were introduced: `reference`, `lines`, and
 `page_xml` are derived directly from Lund's human-transcribed PAGE XML.
@@ -268,6 +304,7 @@ def publish(
     max_samples: int | None,
     private: bool,
     resume: bool,
+    sample_seed: int | None,
     work_dir: Path,
 ) -> None:
     token = get_token() or os.environ.get("HF_TOKEN")
@@ -287,8 +324,13 @@ def publish(
     work_dir.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(archive_path) as archive:
         pairs = discover_pairs(archive)
+        source_count = len(pairs)
         if max_samples is not None:
-            pairs = pairs[:max_samples]
+            pairs = (
+                deterministic_sample(pairs, max_samples, sample_seed)
+                if sample_seed is not None
+                else pairs[:max_samples]
+            )
         shard_count = math.ceil(len(pairs) / shard_size)
         expected_shards = {
             f"data/train-{index:05d}-of-{shard_count:05d}.parquet" for index in range(shard_count)
@@ -319,7 +361,12 @@ def publish(
             print(f"Uploaded shard {shard_index + 1}/{shard_count}")
 
     api.upload_file(
-        path_or_fileobj=dataset_card(len(pairs), shard_count).encode(),
+        path_or_fileobj=dataset_card(
+            len(pairs),
+            shard_count,
+            source_count=source_count,
+            sample_seed=sample_seed,
+        ).encode(),
         path_in_repo="README.md",
         repo_id=repo_id,
         repo_type="dataset",
@@ -339,6 +386,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--work-dir", type=Path, default=Path("kat57-work"))
     parser.add_argument("--shard-size", type=int, default=128)
     parser.add_argument("--max-samples", type=int)
+    parser.add_argument(
+        "--sample-seed",
+        type=int,
+        help=(
+            "Select --max-samples cards reproducibly across the full archive "
+            "instead of taking the first cards"
+        ),
+    )
     parser.add_argument("--private", action="store_true")
     parser.add_argument("--resume", action="store_true")
     return parser
@@ -350,6 +405,8 @@ def main() -> None:
         raise SystemExit("--shard-size must be at least 1")
     if args.max_samples is not None and args.max_samples < 1:
         raise SystemExit("--max-samples must be at least 1")
+    if args.sample_seed is not None and args.max_samples is None:
+        raise SystemExit("--sample-seed requires --max-samples")
 
     work_dir = args.work_dir.resolve()
     archive = args.archive.resolve() if args.archive else work_dir / ARCHIVE_FILENAME
@@ -366,6 +423,7 @@ def main() -> None:
             max_samples=args.max_samples,
             private=args.private,
             resume=args.resume,
+            sample_seed=args.sample_seed,
             work_dir=work_dir,
         )
     finally:
